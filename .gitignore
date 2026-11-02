@@ -1,0 +1,23 @@
+# Python junk
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Generated output (personal run data)
+Result.html
+*.html
+
+# Secrets
+.env
+.env.*
+.garminconnect/
+*.token
+*.key
+*.pem
+
+# OS / editor junk
+.DS_Store
+.vscode/
+.idea/
+*.swp
