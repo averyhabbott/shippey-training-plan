@@ -28,7 +28,7 @@ PLAN = [
     (2, D(2026, 11, 9), 35, _w(6.5, OPT, 6, 12.5, 10)),
     (3, D(2026, 11, 16), 40, _w(7, OPT, 7.5, 14.5, 11)),
     (4, D(2026, 11, 23), 45, _w(8, OPT, 8.5, 16.5, 12.5)),
-    (5, D(2026, 11, 30), 50, _w(9.5, OPT, 8.5, 18, 14)),
+    (5, D(2026, 11, 30), 50, _w(9, OPT, 9, 18, 14)),
     (6, D(2026, 12, 7), None, "Recovery week. Nothing to track &mdash; enjoy ignoring it."),
     (7, D(2026, 12, 14), 55, _w(8.5, 8.5, 8.5, 17, 13)),
     (8, D(2026, 12, 21), 60, _w(9.5, 9.5, 9, 18.5, 14)),
@@ -36,6 +36,55 @@ PLAN = [
     (10, D(2027, 1, 4), 45, _w(6.5, 7.5, 7, 14, 10.5)),
     (11, D(2027, 1, 11), None, "Race week. Rest up &mdash; nothing to track."),
 ]
+
+STRENGTH_DAYS = {"Tue", "Thu"}  # Tue strength, Thu balance/ankle; logged on Garmin as "Cardio"
+_STRENGTH = "step-ups, slow step-downs, split squats, single-leg calf raises, single-leg balance, plank"
+_SAT = ("Hilly trail. Walk every steep climb from mile 1. Eat every 30&ndash;40 min. "
+        "Loop past your car every 3&ndash;5 mi like the race hub: refill and go in under 3 min.")
+NOTES = {  # phase -> day -> workout notes; the planned miles above still set the distance
+    "build": {
+        "Tue": f"Hills inside the planned miles: 6&ndash;8 &times; ~1 min hard uphill, easy jog down. "
+               f"Then 15&ndash;20 min strength: {_STRENGTH}.",
+        "Wed": "Optional: easy and flat, or skip.",
+        "Thu": "Easy + 6 relaxed 20-sec pickups at the end. Then 10 min balance/ankle work.",
+        "Sat": _SAT,
+        "Sun": "Easy, on tired legs.",
+    },
+    "peak": {
+        "Tue": f"Longer climbs: 4&ndash;6 &times; 3&ndash;4 min uphill, power-hike half of them. "
+               f"Then ~15 min lighter strength: {_STRENGTH}.",
+        "Wed": "Easy.",
+        "Thu": "Easy + 6 relaxed 20-sec pickups at the end. Then 10 min balance/ankle work.",
+        "Sat": _SAT + " Wear full race gear and eat exactly what you'll eat on race day.",
+        "Sun": "Easy, hilly if your body is okay with it.",
+    },
+    "taper": {
+        "Tue": "4 short hills. Last strength session: light, ~10 min.",
+        "Wed": "Easy.",
+        "Thu": "Easy + 4 pickups. Then 5 min balance/ankle work.",
+        "Sat": "Hilly trail, same habits as before, just shorter.",
+        "Sun": "Easy.",
+    },
+}
+
+
+def phase(n):
+    return "build" if n <= 5 else "peak" if n <= 9 else "taper"
+
+
+def strength_status(day, planned, done, today):
+    if day in done:
+        return "&#10003; done" if planned else "&#10003; bonus"
+    if not planned:
+        return ""
+    return "missed" if day < today else "&#9744;"
+
+
+assert strength_status(D(2026, 11, 3), True, {D(2026, 11, 3)}, D(2026, 11, 4)) == "&#10003; done"
+assert strength_status(D(2026, 11, 3), True, set(), D(2026, 11, 4)) == "missed"
+assert strength_status(D(2026, 11, 3), True, set(), D(2026, 11, 3)) == "&#9744;"
+assert strength_status(D(2026, 11, 5), False, {D(2026, 11, 5)}, D(2026, 11, 6)) == "&#10003; bonus"
+assert strength_status(D(2026, 11, 5), False, set(), D(2026, 11, 6)) == ""
 
 # Self-check: every tracked week's required runs land within 0.5 mi over its target.
 for _n, _mon, _target, _days in PLAN:
@@ -59,15 +108,17 @@ def garmin_login():
     return g
 
 
-def fetch_miles(start, end):
-    """Total running miles per date, from Garmin."""
-    miles = {}
+def fetch_garmin(start, end):
+    """Total running miles per date, and the dates with a Cardio (strength) activity, from Garmin."""
+    miles, cardio = {}, set()
     for a in garmin_login().get_activities_by_date(start.isoformat(), end.isoformat()):
-        if "running" not in (a.get("activityType") or {}).get("typeKey", ""):
-            continue
+        kind = (a.get("activityType") or {}).get("typeKey", "")
         day = dt.date.fromisoformat(a["startTimeLocal"][:10])
-        miles[day] = miles.get(day, 0) + (a.get("distance") or 0) / 1609.344
-    return miles
+        if "cardio" in kind:  # Garmin's "Cardio" is typeKey indoor_cardio
+            cardio.add(day)
+        elif "running" in kind:
+            miles[day] = miles.get(day, 0) + (a.get("distance") or 0) / 1609.344
+    return miles, cardio
 
 
 def fmt(x):
@@ -113,10 +164,10 @@ assert dynamic_plan(*_wk1, _ex, D(2026, 11, 8))["Sun"] == 10
 assert dynamic_plan(*_wk1, {D(2026, 11, 3): 7, D(2026, 11, 4): 5}, D(2026, 11, 5))["Thu"] == 0  # block done -> rest
 
 
-def week_table(mon, days, target, miles, today):
-    """Days as columns; rows are Initial Plan, Dynamic Plan, Garmin, and status."""
+def week_table(mon, days, target, miles, cardio, today):
+    """Days as columns; rows are Initial Plan, Strength, Dynamic Plan, Garmin, and status."""
     dyn = dynamic_plan(mon, target, days, miles, today)
-    head, plan_row, dyn_row, got_row, status_row = [], [], [], [], []
+    head, plan_row, dyn_row, got_row, status_row, str_row = [], [], [], [], [], []
     txt = lambda p: "optional" if p == OPT else f"{fmt(p)} mi" if p else "rest"
     for i, name in enumerate(DAYS):
         day = mon + dt.timedelta(i)
@@ -136,14 +187,17 @@ def week_table(mon, days, target, miles, today):
         dyn_row.append(f"<td{c}>{txt(plan) if plan != days.get(name) else ''}</td>")
         got_row.append(f"<td{c}>{fmt(got) + ' mi' if got else '&ndash;'}</td>")
         status_row.append(f"<td{c}>{status}</td>")
+        str_row.append(f"<td{c}>{strength_status(day, name in STRENGTH_DAYS, cardio, today)}</td>")
     return (f"<table><thead><tr><th></th>{''.join(head)}</tr></thead><tbody>"
             f"<tr><th>Initial Plan</th>{''.join(plan_row)}</tr>"
+            f"<tr><th>Strength</th>{''.join(str_row)}</tr>"
             f"<tr><th>Dynamic Plan</th>{''.join(dyn_row)}</tr>"
             f"<tr><th>Garmin</th>{''.join(got_row)}</tr>"
-            f"<tr><th></th>{''.join(status_row)}</tr></tbody></table>")
+            f"<tr><th></th>{''.join(status_row)}</tr>"
+            "</tbody></table>")
 
 
-def week_section(week, miles, today, current):
+def week_section(week, miles, cardio, today, current):
     n, mon, target, days = week
     back = "" if current is None or week == current else f'<p><a href="#wk-{current[0]}">&larr; back to this week</a></p>'
     title = f"Week {n} &middot; {mon:%b %-d} &ndash; {mon + dt.timedelta(6):%b %-d}"
@@ -159,7 +213,8 @@ def week_section(week, miles, today, current):
   <div><span>Done</span><b>{fmt(done)} mi</b></div>
   <div><span>Left</span><b>{fmt(left)} mi</b></div>
 </div>
-{week_table(mon, days, target, miles, today)}</section>"""
+{week_table(mon, days, target, miles, cardio, today)}
+<h3>Workouts</h3><ul class="notes">{"".join(f"<li><b>{d}:</b> {t}</li>" for d, t in NOTES[phase(n)].items())}</ul></section>"""
 
 
 def chart(miles):
@@ -196,7 +251,7 @@ def chart(miles):
             + "".join(parts) + "</svg>")
 
 
-def render(miles, today):
+def render(miles, cardio, today):
     mon = max(today - dt.timedelta(today.weekday()), PLAN[0][1])
     current = next((w for w in PLAN if w[1] == mon), None) if today < RACE else None
     to_race = (RACE - today).days
@@ -207,7 +262,7 @@ def render(miles, today):
         body = "<p class='big'>Race day! Go get it.</p>"
     else:
         body = ""
-    body += "\n".join(week_section(w, miles, today, current) for w in PLAN)
+    body += "\n".join(week_section(w, miles, cardio, today, current) for w in PLAN)
     default = f"wk-{current[0]}" if current else ""
 
     countdown = f"{to_race} days to race day (Sat Jan 16) &middot; " if to_race > 0 else ""
@@ -234,6 +289,7 @@ svg {{ width:100%; height:auto }} .grid {{ stroke:var(--line) }}
 .axis {{ fill:var(--ink2); font-size:12px }} .bar {{ fill:var(--bar) }}
 .target {{ stroke:var(--ink); stroke-width:2 }}
 .legend {{ color:var(--ink2); font-size:.9em }}
+.notes {{ padding-left:20px }} .notes li {{ margin-bottom:6px }}
 .sw {{ display:inline-block; width:12px; height:12px; border-radius:2px; background:var(--bar); vertical-align:-1px }}
 .tk {{ display:inline-block; width:16px; height:2px; background:var(--ink); vertical-align:4px; margin-left:12px }}
 </style></head><body>
@@ -256,10 +312,10 @@ addEventListener("hashchange", show); show();
 def main():
     today = dt.date.today()
     start = PLAN[0][1]
-    miles = fetch_miles(start, today) if today >= start else {}
+    miles, cardio = fetch_garmin(start, today) if today >= start else ({}, set())
     if today < start:
         garmin_login()  # still sign in, so first-time setup happens now
-    OUT.write_text(render(miles, today))
+    OUT.write_text(render(miles, cardio, today))
     webbrowser.open(OUT.as_uri())
     print(f"Opened {OUT}")
 
