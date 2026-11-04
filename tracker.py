@@ -39,6 +39,12 @@ PLAN = [
 
 STRENGTH_DAYS = {"Tue", "Thu"}  # Tue strength, Thu balance/ankle; logged on Garmin as "Cardio"
 _STRENGTH = "step-ups, slow step-downs, split squats, single-leg calf raises, single-leg balance, plank"
+_ANKLE = ("single-leg balance, eyes open, next to a counter, tapping the free foot forward, "
+          "sideways and back (3 &times; 30 sec each leg); "
+          "single-leg calf raises off a step, 3 sec down (2 &times; 15 each leg); "
+          "single-leg mini squats standing on a pillow (2 &times; 10 each leg); "
+          "heel walks then toe walks (30 sec each); "
+          "side-to-side hops over a line on one foot (2 &times; 20 sec each leg)")
 _SAT = ("Hilly trail. Walk every steep climb from mile 1. Eat every 30&ndash;40 min. "
         "Loop past your car every 3&ndash;5 mi like the race hub: refill and go in under 3 min.")
 NOTES = {  # phase -> day -> workout notes; the planned miles above still set the distance
@@ -46,7 +52,7 @@ NOTES = {  # phase -> day -> workout notes; the planned miles above still set th
         "Tue": f"Hills inside the planned miles: 6&ndash;8 &times; ~1 min hard uphill, easy jog down. "
                f"Then 15&ndash;20 min strength: {_STRENGTH}.",
         "Wed": "Optional: easy and flat, or skip.",
-        "Thu": "Easy + 6 relaxed 20-sec pickups at the end. Then 10 min balance/ankle work.",
+        "Thu": f"Easy + 6 relaxed 20-sec pickups at the end. Then ~10 min ankle/stability: {_ANKLE}.",
         "Sat": _SAT,
         "Sun": "Easy, on tired legs.",
     },
@@ -54,14 +60,15 @@ NOTES = {  # phase -> day -> workout notes; the planned miles above still set th
         "Tue": f"Longer climbs: 4&ndash;6 &times; 3&ndash;4 min uphill, power-hike half of them. "
                f"Then ~15 min lighter strength: {_STRENGTH}.",
         "Wed": "Easy.",
-        "Thu": "Easy + 6 relaxed 20-sec pickups at the end. Then 10 min balance/ankle work.",
+        "Thu": f"Easy + 6 relaxed 20-sec pickups at the end. Then ~10 min ankle/stability: {_ANKLE}.",
         "Sat": _SAT + " Wear full race gear and eat exactly what you'll eat on race day.",
         "Sun": "Easy, hilly if your body is okay with it.",
     },
     "taper": {
         "Tue": "4 short hills. Last strength session: light, ~10 min.",
         "Wed": "Easy.",
-        "Thu": "Easy + 4 pickups. Then 5 min balance/ankle work.",
+        "Thu": "Easy + 4 pickups. Then ~5 min ankle/stability: single-leg balance, eyes open, next to a counter "
+               "(2 &times; 30 sec each leg); single-leg calf raises off a step (1 &times; 15 each leg). No hops.",
         "Sat": "Hilly trail, same habits as before, just shorter.",
         "Sun": "Easy.",
     },
@@ -118,7 +125,7 @@ def fetch_garmin(start, end):
             cardio.add(day)
         elif "running" in kind:
             miles[day] = miles.get(day, 0) + (a.get("distance") or 0) / 1609.344
-    return miles, cardio
+    return {d: round(m, 1) for d, m in miles.items()}, cardio  # plan math uses the miles shown
 
 
 def fmt(x):
