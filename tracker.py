@@ -15,8 +15,8 @@ OPT = "optional"
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 # (week #, Monday, target miles, planned miles by day). Target None = hidden week.
-# Sat = target / 2.75 (wk 1-5) or / 3.25 (wk 7+), Sun = 0.75x Sat, Tue/Wed/Thu = 0.5x Sat,
-# Wed (wk 7+), Thu and Sun are what dynamic_plan() gives an untouched week, so the
+# Sat = target / 2.75 (wk 1-4) or / 3.25 (wk 6+), Sun = 0.75x Sat, Tue/Wed/Thu = 0.5x Sat,
+# Wed (wk 6+), Thu and Sun are what dynamic_plan() gives an untouched week, so the
 # Dynamic Plan starts identical to this one. Weeks land 0-0.5 mi over target (rounding up).
 def _w(tue, wed, thu, sat, sun):
     return {"Tue": tue, "Wed": wed, "Thu": thu, "Sat": sat, "Sun": sun}
@@ -25,13 +25,13 @@ D = dt.date
 PLAN = [
     (0, D(2026, 10, 26), 25, _w(4.5, OPT, 4.5, 9, 7)),
     (1, D(2026, 11, 2), 30, _w(5.5, OPT, 5.5, 11, 8.5)),
-    (2, D(2026, 11, 9), 35, _w(6.5, OPT, 6, 12.5, 10)),
-    (3, D(2026, 11, 16), 40, _w(7, OPT, 7.5, 14.5, 11)),
-    (4, D(2026, 11, 23), 45, _w(8, OPT, 8.5, 16.5, 12.5)),
-    (5, D(2026, 11, 30), 50, _w(9, OPT, 9, 18, 14)),
-    (6, D(2026, 12, 7), None, "Recovery week. Nothing to track &mdash; enjoy ignoring it."),
-    (7, D(2026, 12, 14), 55, _w(8.5, 8.5, 8.5, 17, 13)),
-    (8, D(2026, 12, 21), 60, _w(9.5, 9.5, 9, 18.5, 14)),
+    (2, D(2026, 11, 9), 40, _w(7, OPT, 7.5, 14.5, 11)),
+    (3, D(2026, 11, 16), 45, _w(8, OPT, 8.5, 16.5, 12.5)),
+    (4, D(2026, 11, 23), 50, _w(9, OPT, 9, 18, 14)),
+    (5, D(2026, 11, 30), None, "Recovery week. Nothing to track &mdash; enjoy ignoring it."),
+    (6, D(2026, 12, 7), 55, _w(8.5, 8.5, 8.5, 17, 13)),
+    (7, D(2026, 12, 14), 60, _w(9.5, 9.5, 9, 18.5, 14)),
+    (8, D(2026, 12, 21), 65, _w(10, 10, 10, 20, 15)),
     (9, D(2026, 12, 28), 65, _w(10, 10, 10, 20, 15)),
     (10, D(2027, 1, 4), 45, _w(6.5, 7.5, 7, 14, 10.5)),
     (11, D(2027, 1, 11), None, "Race week. Rest up &mdash; nothing to track."),
@@ -76,7 +76,7 @@ NOTES = {  # phase -> day -> workout notes; the planned miles above still set th
 
 
 def phase(n):
-    return "build" if n <= 5 else "peak" if n <= 9 else "taper"
+    return "build" if n <= 4 else "peak" if n <= 9 else "taper"
 
 
 def strength_status(day, planned, done, today):
@@ -116,8 +116,8 @@ def garmin_login():
 
 
 def fetch_garmin(start, end):
-    """Total running miles per date, and the dates with a Cardio (strength) activity, from Garmin."""
-    miles, cardio = {}, set()
+    """Running miles per date, Cardio (strength) dates, and running climb in ft/mi per date, from Garmin."""
+    miles, cardio, gain = {}, set(), {}
     for a in garmin_login().get_activities_by_date(start.isoformat(), end.isoformat()):
         kind = (a.get("activityType") or {}).get("typeKey", "")
         day = dt.date.fromisoformat(a["startTimeLocal"][:10])
@@ -125,7 +125,9 @@ def fetch_garmin(start, end):
             cardio.add(day)
         elif "running" in kind:
             miles[day] = miles.get(day, 0) + (a.get("distance") or 0) / 1609.344
-    return {d: round(m, 1) for d, m in miles.items()}, cardio  # plan math uses the miles shown
+            gain[day] = gain.get(day, 0) + (a.get("elevationGain") or 0) * 3.28084  # meters -> feet
+    climb = {d: round(gain[d] / m) for d, m in miles.items() if m}  # day's total ft / day's total mi
+    return {d: round(m, 1) for d, m in miles.items()}, cardio, climb  # plan math uses the miles shown
 
 
 def fmt(x):
@@ -153,28 +155,33 @@ def dynamic_plan(mon, target, days, miles, today):
         wed = val(2, dyn["Wed"])
         dyn["Thu"] = ceil_half(1.5 * sat - tue - wed)
     before_sun = val(0, 0) + tue + wed + val(3, dyn["Thu"]) + val(4, 0) + val(5, sat)
-    dyn["Sun"] = max(ceil_half(0.75 * sat), ceil_half(target - before_sun))
+    dyn["Sun"] = min(days["Sun"], ceil_half(target - before_sun))  # never more than planned; less if the week is already covered
     return dyn
 
 
-# Self-check: an untouched week's Dynamic Plan equals its Initial Plan (no drift).
+# Self-check: an untouched week's Dynamic Plan equals its Initial Plan (no drift), except
+# Sunday may come in up to 0.5 lower because the Initial Plan rounds weeks up past target.
 for _n, _mon, _target, _days in PLAN:
     if _target is not None:
-        assert dynamic_plan(_mon, _target, _days, {}, _mon) == _days, f"week {_n} drifts"
+        _dyn = dynamic_plan(_mon, _target, _days, {}, _mon)
+        assert {**_dyn, "Sun": 0} == {**_days, "Sun": 0}, f"week {_n} drifts"
+        assert _days["Sun"] - 0.5 <= _dyn["Sun"] <= _days["Sun"], f"week {_n} Sunday drifts"
 
 # Self-check: the worked examples from planning.
 _wk1 = PLAN[1][1:]
 _ex = {D(2026, 11, 3): 7, D(2026, 11, 4): 2}
 assert dynamic_plan(*_wk1, _ex, D(2026, 11, 5))["Thu"] == 2
 _ex |= {D(2026, 11, 5): 2, D(2026, 11, 7): 9}
-assert dynamic_plan(*_wk1, _ex, D(2026, 11, 8))["Sun"] == 10
+assert dynamic_plan(*_wk1, _ex, D(2026, 11, 8))["Sun"] == 8.5  # behind on the week: Sunday capped at plan
+assert dynamic_plan(*_wk1, _ex | {D(2026, 11, 7): 14}, D(2026, 11, 8))["Sun"] == 5  # ahead: only what's left
+assert dynamic_plan(*_wk1, _ex | {D(2026, 11, 7): 20}, D(2026, 11, 8))["Sun"] == 0  # target already hit
 assert dynamic_plan(*_wk1, {D(2026, 11, 3): 7, D(2026, 11, 4): 5}, D(2026, 11, 5))["Thu"] == 0  # block done -> rest
 
 
-def week_table(mon, days, target, miles, cardio, today):
-    """Days as columns; rows are Initial Plan, Strength, Dynamic Plan, Garmin, and status."""
+def week_table(mon, days, target, miles, cardio, climb, today):
+    """Days as columns; rows are Initial Plan, Strength, Dynamic Plan, Garmin Distance, Garmin Climbing, and status."""
     dyn = dynamic_plan(mon, target, days, miles, today)
-    head, plan_row, dyn_row, got_row, status_row, str_row = [], [], [], [], [], []
+    head, plan_row, dyn_row, got_row, climb_row, status_row, str_row = [], [], [], [], [], [], []
     txt = lambda p: "optional" if p == OPT else f"{fmt(p)} mi" if p else "rest"
     for i, name in enumerate(DAYS):
         day = mon + dt.timedelta(i)
@@ -193,18 +200,20 @@ def week_table(mon, days, target, miles, cardio, today):
         plan_row.append(f"<td{c}>{txt(days.get(name))}</td>")
         dyn_row.append(f"<td{c}>{txt(plan) if plan != days.get(name) else ''}</td>")
         got_row.append(f"<td{c}>{fmt(got) + ' mi' if got else '&ndash;'}</td>")
+        climb_row.append(f"<td{c}>{str(climb[day]) + ' ft/mi' if day in climb else '&ndash;'}</td>")
         status_row.append(f"<td{c}>{status}</td>")
         str_row.append(f"<td{c}>{strength_status(day, name in STRENGTH_DAYS, cardio, today)}</td>")
     return (f"<table><thead><tr><th></th>{''.join(head)}</tr></thead><tbody>"
             f"<tr><th>Initial Plan</th>{''.join(plan_row)}</tr>"
             f"<tr><th>Strength</th>{''.join(str_row)}</tr>"
             f"<tr><th>Dynamic Plan</th>{''.join(dyn_row)}</tr>"
-            f"<tr><th>Garmin</th>{''.join(got_row)}</tr>"
+            f"<tr><th>Garmin Distance</th>{''.join(got_row)}</tr>"
+            f"<tr><th>Garmin Climbing</th>{''.join(climb_row)}</tr>"
             f"<tr><th></th>{''.join(status_row)}</tr>"
             "</tbody></table>")
 
 
-def week_section(week, miles, cardio, today, current):
+def week_section(week, miles, cardio, climb, today, current):
     n, mon, target, days = week
     back = "" if current is None or week == current else f'<p><a href="#wk-{current[0]}">&larr; back to this week</a></p>'
     title = f"Week {n} &middot; {mon:%b %-d} &ndash; {mon + dt.timedelta(6):%b %-d}"
@@ -220,7 +229,7 @@ def week_section(week, miles, cardio, today, current):
   <div><span>Done</span><b>{fmt(done)} mi</b></div>
   <div><span>Left</span><b>{fmt(left)} mi</b></div>
 </div>
-{week_table(mon, days, target, miles, cardio, today)}
+{week_table(mon, days, target, miles, cardio, climb, today)}
 <h3>Workouts</h3><ul class="notes">{"".join(f"<li><b>{d}:</b> {t}</li>" for d, t in NOTES[phase(n)].items())}</ul></section>"""
 
 
@@ -237,7 +246,7 @@ def chart(miles):
         cx = 40 + slot * k + slot / 2
         mark = []
         if target is None:
-            label = "Rest" if n == 6 else "Race"
+            label = "Rest" if n == 5 else "Race"
             tip = f"Week {n} ({mon:%b %-d}): {label.lower()} week"
             mark.append(f'<text x="{cx}" y="{base - 8}" class="axis" text-anchor="middle">{label}</text>')
         else:
@@ -258,7 +267,7 @@ def chart(miles):
             + "".join(parts) + "</svg>")
 
 
-def render(miles, cardio, today):
+def render(miles, cardio, climb, today):
     mon = max(today - dt.timedelta(today.weekday()), PLAN[0][1])
     current = next((w for w in PLAN if w[1] == mon), None) if today < RACE else None
     to_race = (RACE - today).days
@@ -269,7 +278,7 @@ def render(miles, cardio, today):
         body = "<p class='big'>Race day! Go get it.</p>"
     else:
         body = ""
-    body += "\n".join(week_section(w, miles, cardio, today, current) for w in PLAN)
+    body += "\n".join(week_section(w, miles, cardio, climb, today, current) for w in PLAN)
     default = f"wk-{current[0]}" if current else ""
 
     countdown = f"{to_race} days to race day (Sat Jan 16) &middot; " if to_race > 0 else ""
@@ -319,10 +328,10 @@ addEventListener("hashchange", show); show();
 def main():
     today = dt.date.today()
     start = PLAN[0][1]
-    miles, cardio = fetch_garmin(start, today) if today >= start else ({}, set())
+    miles, cardio, climb = fetch_garmin(start, today) if today >= start else ({}, set(), {})
     if today < start:
         garmin_login()  # still sign in, so first-time setup happens now
-    OUT.write_text(render(miles, cardio, today))
+    OUT.write_text(render(miles, cardio, climb, today))
     webbrowser.open(OUT.as_uri())
     print(f"Opened {OUT}")
 
