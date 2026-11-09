@@ -214,9 +214,10 @@ assert dynamic_plan(*_wk1, {D(2026, 11, 3): 7, D(2026, 11, 4): 5}, D(2026, 11, 5
 
 
 def week_table(mon, days, target, miles, cardio, climb, today):
-    """Days as columns; rows are Initial Plan, Strength, Dynamic Plan, Garmin Distance, Garmin Climbing, and status."""
+    """Days as columns; rows are Initial Plan, Dynamic Plan, Strength, Garmin Distance, Garmin Climbing, and status.
+    Also one swipeable card per day, which replaces the table on phone-width screens."""
     dyn = dynamic_plan(mon, target, days, miles, today)
-    head, plan_row, dyn_row, got_row, climb_row, status_row, str_row = [], [], [], [], [], [], []
+    head, plan_row, dyn_row, got_row, climb_row, status_row, str_row, cards = [], [], [], [], [], [], [], []
     txt = lambda p: "optional" if p == OPT else f"{fmt(p)} mi" if p else "rest"
     for i, name in enumerate(DAYS):
         day = mon + dt.timedelta(i)
@@ -231,17 +232,34 @@ def week_table(mon, days, target, miles, cardio, climb, today):
         else:
             status = "today" if day == today else ""
         c = ' class="today"' if day == today else ""
+        cell = {  # same values, labels and order for the table column and the phone card
+            "Initial Plan": txt(days.get(name)),
+            "Dynamic Plan": txt(plan) if plan != days.get(name) else "",
+            "Strength": strength_status(day, name in STRENGTH_DAYS, cardio, today),
+            "Garmin Distance": fmt(got) + " mi" if got else "&ndash;",
+            "Garmin Climbing": str(climb[day]) + " ft/mi" if day in climb else "&ndash;",
+        }
         head.append(f"<th{c}>{name}<br><small>{md(day)}</small></th>")
-        plan_row.append(f"<td{c}>{txt(days.get(name))}</td>")
-        dyn_row.append(f"<td{c}>{txt(plan) if plan != days.get(name) else ''}</td>")
-        got_row.append(f"<td{c}>{fmt(got) + ' mi' if got else '&ndash;'}</td>")
-        climb_row.append(f"<td{c}>{str(climb[day]) + ' ft/mi' if day in climb else '&ndash;'}</td>")
+        plan_row.append(f"<td{c}>{cell['Initial Plan']}</td>")
+        dyn_row.append(f"<td{c}>{cell['Dynamic Plan']}</td>")
+        str_row.append(f"<td{c}>{cell['Strength']}</td>")
+        got_row.append(f"<td{c}>{cell['Garmin Distance']}</td>")
+        climb_row.append(f"<td{c}>{cell['Garmin Climbing']}</td>")
         status_row.append(f"<td{c}>{status}</td>")
-        str_row.append(f"<td{c}>{strength_status(day, name in STRENGTH_DAYS, cardio, today)}</td>")
-    return (f"<table><thead><tr><th></th>{''.join(head)}</tr></thead><tbody>"
+        rows = cell.items()
+        badge = status or ("today" if day == today else "")
+        cards.append(f'<article class="card d{i}{" today" if day == today else ""}" data-day="{i}">'
+                     f'<header><b>{name}</b> <small>{md(day)}</small><span class="badge">{badge}</span></header>'
+                     f'<dl>{"".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)}</dl></article>')
+    dots = "".join(f'<button class="dot d{i}" aria-label="{n}"></button>' for i, n in enumerate(DAYS))
+    return (f'<div class="days"><button class="nav" data-step="-1" aria-label="Previous day">&lsaquo;</button>'
+            f'<div class="cards">{"".join(cards)}</div>'
+            f'<button class="nav" data-step="1" aria-label="Next day">&rsaquo;</button>'
+            f'<div class="dots">{dots}</div></div>'
+            f"<table class=\"wk\"><thead><tr><th></th>{''.join(head)}</tr></thead><tbody>"
             f"<tr><th>Initial Plan</th>{''.join(plan_row)}</tr>"
-            f"<tr><th>Strength</th>{''.join(str_row)}</tr>"
             f"<tr><th>Dynamic Plan</th>{''.join(dyn_row)}</tr>"
+            f"<tr><th>Strength</th>{''.join(str_row)}</tr>"
             f"<tr><th>Garmin Distance</th>{''.join(got_row)}</tr>"
             f"<tr><th>Garmin Climbing</th>{''.join(climb_row)}</tr>"
             f"<tr><th></th>{''.join(status_row)}</tr>"
@@ -345,6 +363,29 @@ svg {{ width:100%; height:auto }} .grid {{ stroke:var(--line) }}
 .notes {{ padding-left:20px }} .notes li {{ margin-bottom:6px }}
 .sw {{ display:inline-block; width:12px; height:12px; border-radius:2px; background:var(--bar); vertical-align:-1px }}
 .tk {{ display:inline-block; width:16px; height:2px; background:var(--ink); vertical-align:4px; margin-left:12px }}
+/* Day colors, ROYGBIV Mon-Sun */
+.d0 {{ --c:#e5484d }} .d1 {{ --c:#f76b15 }} .d2 {{ --c:#e2a200 }} .d3 {{ --c:#30a46c }}
+.d4 {{ --c:#0090ff }} .d5 {{ --c:#5b5bd6 }} .d6 {{ --c:#8e4ec6 }}
+/* Phone: swipeable day cards replace the week table */
+.days {{ display:none }}
+@media (max-width: 600px) {{
+  table.wk {{ display:none }}
+  .days {{ display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; margin:12px -12px }}
+}}
+.cards {{ display:flex; gap:12px; overflow-x:auto; scroll-snap-type:x mandatory; scrollbar-width:none; padding:2px 0 }}
+.cards::-webkit-scrollbar {{ display:none }}
+.card {{ flex:0 0 100%; box-sizing:border-box; scroll-snap-align:start; border:2px solid var(--c); border-radius:14px;
+         background:color-mix(in srgb, var(--c) 12%, transparent); padding:14px 16px }}
+.card.today {{ border-width:3px; padding:13px 15px }}
+.card header {{ display:flex; align-items:baseline; gap:8px; margin-bottom:12px }}
+.card header b {{ font-size:1.3em }} .card header small {{ color:var(--ink2) }}
+.badge {{ margin-left:auto; font-weight:600 }}
+.card dl {{ display:grid; grid-template-columns:auto 1fr; gap:8px 20px; margin:0 }}
+.card dt {{ color:var(--ink2) }} .card dd {{ margin:0; font-weight:600 }}
+.nav {{ background:none; border:0; color:var(--ink2); font-size:2.2em; line-height:1; padding:4px 8px; cursor:pointer }}
+.dots {{ grid-column:1 / -1; display:flex; justify-content:center; gap:10px; margin-top:12px }}
+.dot {{ width:12px; height:12px; border-radius:50%; border:2px solid var(--c); background:transparent; padding:0; cursor:pointer }}
+.dot.on {{ background:var(--c) }}
 </style></head><body>
 <h1>Training Tracker</h1>
 <p class="sub">{countdown}updated {updated}</p>
@@ -353,9 +394,29 @@ svg {{ width:100%; height:auto }} .grid {{ stroke:var(--line) }}
 <p class="legend"><span class="sw"></span> Actual miles <span class="tk"></span> Target &middot; click a week to see its days</p>
 {chart(miles)}
 <script>
+// Day cards: swipe, tap the arrows, or tap a dot. Opens on today's card.
+function cardIndex(box) {{ return Math.round(box.scrollLeft / (box.children[0].offsetWidth + 12)); }}
+function goTo(days, i, how) {{
+  const box = days.querySelector(".cards"), cards = box.children;
+  i = Math.max(0, Math.min(cards.length - 1, i));
+  box.scrollTo({{ left: cards[i].offsetLeft - cards[0].offsetLeft, behavior: how || "smooth" }});
+}}
+document.querySelectorAll(".days").forEach(days => {{
+  const box = days.querySelector(".cards"), dots = days.querySelectorAll(".dot");
+  const mark = () => dots.forEach((d, k) => d.classList.toggle("on", k === cardIndex(box)));
+  box.addEventListener("scroll", mark, {{ passive: true }});
+  days.querySelectorAll(".nav").forEach(b => b.onclick = () => goTo(days, cardIndex(box) + Number(b.dataset.step)));
+  dots.forEach((d, k) => d.onclick = () => goTo(days, k));
+  mark();
+}});
 function show() {{
   const id = location.hash.slice(1) || "{default}";
   document.querySelectorAll(".week").forEach(s => s.hidden = s.id !== id);
+  const days = id && document.querySelector("#" + id + " .days");
+  if (days) {{
+    const t = days.querySelector(".card.today");
+    goTo(days, t ? Number(t.dataset.day) : 0, "instant");
+  }}
 }}
 addEventListener("hashchange", show); show();
 </script>
