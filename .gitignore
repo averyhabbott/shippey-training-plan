@@ -21,3 +21,5 @@ Result.html
 .vscode/
 .idea/
 *.swp
+
+.env

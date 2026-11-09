@@ -1,14 +1,19 @@
 """Training tracker: pulls runs from Garmin Connect and opens this week's plan in the browser.
 
-Run:  venv/bin/python tracker.py
+Run:  python tracker.py   (needs only built-in Python; reads the Garmin API key from .env)
+GitHub runs this every hour and publishes the page (.github/workflows/publish.yml).
 """
 import datetime as dt
+import json
 import math
-import getpass
+import os
+import urllib.parse
+import urllib.request
 import webbrowser
 from pathlib import Path
 
-TOKENS = "~/.garminconnect"  # Garmin login key lives here (not the password)
+API = "https://personal.connectapi.garmin.com"  # Garmin's official Personal API
+ENV_FILE = Path(__file__).with_name(".env")  # holds API_KEY='...' on your computer; never uploaded
 OUT = Path(__file__).with_name("Result.html")
 RACE = dt.date(2027, 1, 16)
 OPT = "optional"
@@ -37,7 +42,7 @@ PLAN = [
     (11, D(2027, 1, 11), None, "Race week. Rest up &mdash; nothing to track."),
 ]
 
-STRENGTH_DAYS = {"Tue", "Thu"}  # Tue strength, Thu balance/ankle; logged on Garmin as "Cardio"
+STRENGTH_DAYS = {"Tue", "Thu"}  # Tue strength, Thu balance/ankle; logged on Garmin as "Cardio" (indoor_cardio)
 _STRENGTH = "step-ups, slow step-downs, split squats, single-leg calf raises, single-leg balance, plank"
 _ANKLE = ("single-leg balance, eyes open, next to a counter, tapping the free foot forward, "
           "sideways and back (3 &times; 30 sec each leg); "
@@ -100,28 +105,53 @@ for _n, _mon, _target, _days in PLAN:
         assert 0 <= _sum - _target <= 0.5, f"week {_n} plans {_sum} mi, target {_target}"
 
 
-def garmin_login():
-    from garminconnect import Garmin, GarminConnectAuthenticationError
-    try:
-        g = Garmin()
-        g.login(TOKENS)  # uses the saved login key
-        return g
-    except GarminConnectAuthenticationError:
-        pass  # no saved key yet, or it expired
-    print("Garmin sign-in needed (your password is used once and not saved).")
-    g = Garmin(input("Garmin email: "), getpass.getpass("Garmin password: "),
-               prompt_mfa=lambda: input("Garmin 2-factor code: "))
-    g.login(TOKENS)
-    return g
+def api_key():
+    """The Garmin Personal API key: the API_KEY setting (on GitHub), else API_KEY='...' in .env."""
+    key = os.environ.get("API_KEY", "").strip()
+    if not key and ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            name, _, value = line.partition("=")
+            if name.strip() == "API_KEY":
+                key = value.strip().strip("'\"")
+    if not key:
+        raise SystemExit("No Garmin API key. Put API_KEY='...' in .env, or set the API_KEY secret on GitHub.")
+    return key
+
+
+def garmin_call(path, auth, method="GET", **params):
+    url = f"{API}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
+    req = urllib.request.Request(url, method=method, data=b"" if method == "POST" else None,
+                                 headers={"Authorization": auth, "User-Agent": "training-tracker"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode().strip()
+
+
+def garmin_token():
+    """Trade the long-lived API key for a 24-hour access token. Nothing to save: each run gets a fresh one."""
+    body = garmin_call("/personalapitoken-service/personal-api/personal-api-key/token",
+                       f"ApiKey {api_key()}", method="POST")
+    return json.loads(body) if body.startswith('"') else body  # Garmin sends the token as plain text
+
+
+def garmin_activities(start, end):
+    """Every activity from start to end (inclusive dates), fetched 100 at a time so none get cut off."""
+    auth, acts, page = f"Bearer {garmin_token()}", [], 100
+    while True:
+        batch = json.loads(garmin_call("/activitylist-service/activities/search/activities", auth,
+                                       startDate=start.isoformat(), endDate=end.isoformat(),
+                                       start=len(acts), limit=page))
+        acts += batch
+        if len(batch) < page:
+            return acts
 
 
 def fetch_garmin(start, end):
     """Running miles per date, Cardio (strength) dates, and running climb in ft/mi per date, from Garmin."""
     miles, cardio, gain = {}, set(), {}
-    for a in garmin_login().get_activities_by_date(start.isoformat(), end.isoformat()):
+    for a in garmin_activities(start, end):
         kind = (a.get("activityType") or {}).get("typeKey", "")
         day = dt.date.fromisoformat(a["startTimeLocal"][:10])
-        if "cardio" in kind:  # Garmin's "Cardio" is typeKey indoor_cardio
+        if kind == "indoor_cardio":  # plan strength/ankle days. NOT strength_training: that's unrelated upper-body work
             cardio.add(day)
         elif "running" in kind:
             miles[day] = miles.get(day, 0) + (a.get("distance") or 0) / 1609.344
@@ -132,6 +162,11 @@ def fetch_garmin(start, end):
 
 def fmt(x):
     return f"{x:.1f}".rstrip("0").rstrip(".")
+
+
+def md(d):
+    """'Nov 9'. (strftime's %-d drops the leading zero on Mac/Linux but crashes on Windows.)"""
+    return f"{d:%b} {d.day}"
 
 
 def ceil_half(x):
@@ -196,7 +231,7 @@ def week_table(mon, days, target, miles, cardio, climb, today):
         else:
             status = "today" if day == today else ""
         c = ' class="today"' if day == today else ""
-        head.append(f"<th{c}>{name}<br><small>{day:%b %-d}</small></th>")
+        head.append(f"<th{c}>{name}<br><small>{md(day)}</small></th>")
         plan_row.append(f"<td{c}>{txt(days.get(name))}</td>")
         dyn_row.append(f"<td{c}>{txt(plan) if plan != days.get(name) else ''}</td>")
         got_row.append(f"<td{c}>{fmt(got) + ' mi' if got else '&ndash;'}</td>")
@@ -216,7 +251,7 @@ def week_table(mon, days, target, miles, cardio, climb, today):
 def week_section(week, miles, cardio, climb, today, current):
     n, mon, target, days = week
     back = "" if current is None or week == current else f'<p><a href="#wk-{current[0]}">&larr; back to this week</a></p>'
-    title = f"Week {n} &middot; {mon:%b %-d} &ndash; {mon + dt.timedelta(6):%b %-d}"
+    title = f"Week {n} &middot; {md(mon)} &ndash; {md(mon + dt.timedelta(6))}"
     if week == current:
         title += " (this week)" if today >= mon else f" (starts Monday)"
     if target is None:
@@ -247,11 +282,11 @@ def chart(miles):
         mark = []
         if target is None:
             label = "Rest" if n == 5 else "Race"
-            tip = f"Week {n} ({mon:%b %-d}): {label.lower()} week"
+            tip = f"Week {n} ({md(mon)}): {label.lower()} week"
             mark.append(f'<text x="{cx}" y="{base - 8}" class="axis" text-anchor="middle">{label}</text>')
         else:
             done = sum(miles.get(mon + dt.timedelta(i), 0) for i in range(7))
-            tip = f"Week {n} ({mon:%b %-d}): {fmt(done)} of {target} mi"
+            tip = f"Week {n} ({md(mon)}): {fmt(done)} of {target} mi"
             bw = 28
             if done:
                 h = base - y(done)
@@ -282,6 +317,8 @@ def render(miles, cardio, climb, today):
     default = f"wk-{current[0]}" if current else ""
 
     countdown = f"{to_race} days to race day (Sat Jan 16) &middot; " if to_race > 0 else ""
+    now = dt.datetime.now()
+    updated = f"{now:%a} {md(now)}, {now.hour % 12 or 12}:{now:%M %p}"
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Training Tracker</title>
 <style>
@@ -310,7 +347,7 @@ svg {{ width:100%; height:auto }} .grid {{ stroke:var(--line) }}
 .tk {{ display:inline-block; width:16px; height:2px; background:var(--ink); vertical-align:4px; margin-left:12px }}
 </style></head><body>
 <h1>Training Tracker</h1>
-<p class="sub">{countdown}updated {dt.datetime.now():%a %b %-d, %-I:%M %p}</p>
+<p class="sub">{countdown}updated {updated}</p>
 {body}
 <h2>All weeks</h2>
 <p class="legend"><span class="sw"></span> Actual miles <span class="tk"></span> Target &middot; click a week to see its days</p>
@@ -329,11 +366,12 @@ def main():
     today = dt.date.today()
     start = PLAN[0][1]
     miles, cardio, climb = fetch_garmin(start, today) if today >= start else ({}, set(), {})
-    if today < start:
-        garmin_login()  # still sign in, so first-time setup happens now
-    OUT.write_text(render(miles, cardio, climb, today))
-    webbrowser.open(OUT.as_uri())
-    print(f"Opened {OUT}")
+    OUT.write_text(render(miles, cardio, climb, today), encoding="utf-8")
+    if os.environ.get("GITHUB_ACTIONS"):  # on GitHub: just build the page; the workflow publishes it
+        print(f"Wrote {OUT}")
+    else:
+        webbrowser.open(OUT.as_uri())
+        print(f"Opened {OUT}")
 
 
 if __name__ == "__main__":
