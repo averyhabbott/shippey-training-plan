@@ -19,27 +19,22 @@ RACE = dt.date(2027, 1, 16)
 OPT = "optional"
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-# (week #, Monday, target miles, planned miles by day). Target None = hidden week.
-# Sat = target / 2.75 (wk 1-4) or / 3.25 (wk 6+), Sun = 0.75x Sat, Tue/Wed/Thu = 0.5x Sat,
-# Wed (wk 6+), Thu and Sun are what dynamic_plan() gives an untouched week, so the
-# Dynamic Plan starts identical to this one. Weeks land 0-0.5 mi over target (rounding up).
-def _w(tue, wed, thu, sat, sun):
-    return {"Tue": tue, "Wed": wed, "Thu": thu, "Sat": sat, "Sun": sun}
-
+# (week #, Monday, target miles). A text note instead of a target = hidden week. Edit targets here;
+# every day's miles are calculated from them by initial_plan() below.
 D = dt.date
-PLAN = [
-    (0, D(2026, 10, 26), 25, _w(4.5, OPT, 4.5, 9, 7)),
-    (1, D(2026, 11, 2), 30, _w(5.5, OPT, 5.5, 11, 8.5)),
-    (2, D(2026, 11, 9), 40, _w(7, OPT, 7.5, 14.5, 11)),
-    (3, D(2026, 11, 16), 45, _w(8, OPT, 8.5, 16.5, 12.5)),
-    (4, D(2026, 11, 23), 50, _w(9, OPT, 9, 18, 14)),
-    (5, D(2026, 11, 30), None, "Recovery week. Nothing to track &mdash; enjoy ignoring it."),
-    (6, D(2026, 12, 7), 55, _w(8.5, 8.5, 8.5, 17, 13)),
-    (7, D(2026, 12, 14), 60, _w(9.5, 9.5, 9, 18.5, 14)),
-    (8, D(2026, 12, 21), 65, _w(10, 10, 10, 20, 15)),
-    (9, D(2026, 12, 28), 65, _w(10, 10, 10, 20, 15)),
-    (10, D(2027, 1, 4), 45, _w(6.5, 7.5, 7, 14, 10.5)),
-    (11, D(2027, 1, 11), None, "Race week. Rest up &mdash; nothing to track."),
+WEEKS = [
+    (0, D(2026, 10, 26), 25),
+    (1, D(2026, 11, 2), 30),
+    (2, D(2026, 11, 9), 40),
+    (3, D(2026, 11, 16), 45),
+    (4, D(2026, 11, 23), 50),
+    (5, D(2026, 11, 30), "Recovery week. Nothing to track &mdash; enjoy ignoring it."),
+    (6, D(2026, 12, 7), 55),
+    (7, D(2026, 12, 14), 60),
+    (8, D(2026, 12, 21), 65),
+    (9, D(2026, 12, 28), 65),
+    (10, D(2027, 1, 4), 45),
+    (11, D(2027, 1, 11), "Race week. Rest up &mdash; nothing to track."),
 ]
 
 STRENGTH_DAYS = {"Tue", "Thu"}  # Tue strength, Thu balance/ankle; logged on Garmin as "Cardio" (indoor_cardio)
@@ -98,11 +93,6 @@ assert strength_status(D(2026, 11, 3), True, set(), D(2026, 11, 3)) == "&#9744;"
 assert strength_status(D(2026, 11, 5), False, {D(2026, 11, 5)}, D(2026, 11, 6)) == "&#10003; bonus"
 assert strength_status(D(2026, 11, 5), False, set(), D(2026, 11, 6)) == ""
 
-# Self-check: every tracked week's required runs land within 0.5 mi over its target.
-for _n, _mon, _target, _days in PLAN:
-    if _target is not None:
-        _sum = sum(v for v in _days.values() if v != OPT)
-        assert 0 <= _sum - _target <= 0.5, f"week {_n} plans {_sum} mi, target {_target}"
 
 
 def api_key():
@@ -173,6 +163,28 @@ def ceil_half(x):
     return max(math.ceil(x * 2 - 1e-9) / 2, 0)  # 1e-9: float noise must not bump 8.0 to 8.5
 
 
+def round_half(x):
+    return math.floor(x * 2 + 0.5) / 2  # nearest half mile; exact halves round up
+
+
+def initial_plan(n, target):
+    """Sat = target / 2.75 (wk 0-4) or / 3.25 (wk 6+), Tue = half of Sat; Wed (wk 6+), Thu and Sun
+    use the same math as dynamic_plan(), so an untouched week's Dynamic Plan matches. Sun = what's left."""
+    sat = round_half(target / (2.75 if n <= 4 else 3.25))
+    tue = round_half(sat / 2)
+    if n <= 4:  # Tue + Thu = Sat, Wed optional
+        wed, thu = OPT, ceil_half(sat - tue)
+    else:  # Tue + Wed + Thu = 1.5x Sat
+        wed = ceil_half((1.5 * sat - tue) / 2)
+        thu = ceil_half(1.5 * sat - tue - wed)
+    sun = ceil_half(target - tue - (0 if wed == OPT else wed) - thu - sat)
+    return {"Tue": tue, "Wed": wed, "Thu": thu, "Sat": sat, "Sun": sun}
+
+
+# (week #, Monday, target, days) for tracked weeks; (week #, Monday, None, note) for hidden ones.
+PLAN = [(n, mon, t, initial_plan(n, t)) if isinstance(t, int) else (n, mon, None, t) for n, mon, t in WEEKS]
+
+
 def dynamic_plan(mon, target, days, miles, today):
     """Re-plan Wed/Thu/Sun from actuals. A day is 'actual' once it has a run or has passed (skip = 0)."""
     def val(i, plan):
@@ -194,20 +206,23 @@ def dynamic_plan(mon, target, days, miles, today):
     return dyn
 
 
-# Self-check: an untouched week's Dynamic Plan equals its Initial Plan (no drift), except
-# Sunday may come in up to 0.5 lower because the Initial Plan rounds weeks up past target.
+# Self-check: every tracked week's planned days add up to exactly its target.
 for _n, _mon, _target, _days in PLAN:
     if _target is not None:
-        _dyn = dynamic_plan(_mon, _target, _days, {}, _mon)
-        assert {**_dyn, "Sun": 0} == {**_days, "Sun": 0}, f"week {_n} drifts"
-        assert _days["Sun"] - 0.5 <= _dyn["Sun"] <= _days["Sun"], f"week {_n} Sunday drifts"
+        _sum = sum(v for v in _days.values() if v != OPT)
+        assert _sum == _target, f"week {_n} plans {_sum} mi, target {_target}"
+
+# Self-check: an untouched week's Dynamic Plan equals its Initial Plan (no drift).
+for _n, _mon, _target, _days in PLAN:
+    if _target is not None:
+        assert dynamic_plan(_mon, _target, _days, {}, _mon) == _days, f"week {_n} drifts"
 
 # Self-check: the worked examples from planning.
 _wk1 = PLAN[1][1:]
 _ex = {D(2026, 11, 3): 7, D(2026, 11, 4): 2}
 assert dynamic_plan(*_wk1, _ex, D(2026, 11, 5))["Thu"] == 2
 _ex |= {D(2026, 11, 5): 2, D(2026, 11, 7): 9}
-assert dynamic_plan(*_wk1, _ex, D(2026, 11, 8))["Sun"] == 8.5  # behind on the week: Sunday capped at plan
+assert dynamic_plan(*_wk1, _ex, D(2026, 11, 8))["Sun"] == 8  # behind on the week: Sunday capped at plan
 assert dynamic_plan(*_wk1, _ex | {D(2026, 11, 7): 14}, D(2026, 11, 8))["Sun"] == 5  # ahead: only what's left
 assert dynamic_plan(*_wk1, _ex | {D(2026, 11, 7): 20}, D(2026, 11, 8))["Sun"] == 0  # target already hit
 assert dynamic_plan(*_wk1, {D(2026, 11, 3): 7, D(2026, 11, 4): 5}, D(2026, 11, 5))["Thu"] == 0  # block done -> rest
