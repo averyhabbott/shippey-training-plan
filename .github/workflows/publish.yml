@@ -1,12 +1,10 @@
 # Builds the training page from Garmin and publishes it to GitHub Pages.
-# Runs every hour, on every push to main, and on demand (Actions tab -> "Run workflow").
+# Runs on every push to main and on demand: the Actions tab -> "Run workflow",
+# or an outside timer (cron-job.org) calling the workflow_dispatch API.
 # Needs the repo secret API_KEY (Settings -> Secrets and variables -> Actions).
 name: Publish tracker
 
 on:
-  schedule:
-    - cron: "17 * * * *"  # hourly at :17 (GitHub may run it a few minutes late)
-    - cron: "47 12 * * 1"  # weekly (Mon ~7 AM Central): also runs the keep-alive step below
   push:
     branches: [main]
   workflow_dispatch:
@@ -15,7 +13,6 @@ permissions:
   contents: read
   pages: write
   id-token: write
-  actions: write  # lets the keep-alive step re-enable this workflow
 
 concurrency:
   group: pages
@@ -41,10 +38,3 @@ jobs:
           path: _site
       - id: deploy
         uses: actions/deploy-pages@v4
-      # GitHub pauses scheduled jobs in public repos after 60 days without commits.
-      # Re-enabling the workflow once a week resets that clock, so it keeps running through race day.
-      - name: Keep schedule alive
-        if: github.event.schedule == '47 12 * * 1' || github.event_name == 'workflow_dispatch'
-        run: gh workflow enable publish.yml --repo "$GITHUB_REPOSITORY"
-        env:
-          GH_TOKEN: ${{ github.token }}
