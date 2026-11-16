@@ -7,6 +7,8 @@ import datetime as dt
 import json
 import math
 import os
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -151,8 +153,15 @@ def garmin_call(path, auth, method="GET", **params):
     url = f"{API}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
     req = urllib.request.Request(url, method=method, data=b"" if method == "POST" else None,
                                  headers={"Authorization": auth, "User-Agent": "training-tracker"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode().strip()
+    for attempt in range(4):  # Garmin often times out (504) at busy minutes; wait and retry
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.read().decode().strip()
+        except (urllib.error.URLError, TimeoutError) as e:
+            busy = getattr(e, "code", 500) >= 500  # 4xx (bad key, etc.) won't fix itself
+            if not busy or attempt == 3:
+                raise
+            time.sleep(10 * (attempt + 1))
 
 
 def garmin_token():
