@@ -33,8 +33,8 @@ jobs:
           TZ: America/Chicago  # so "today" and "updated" match your clock, not the server's
       - name: Prepare site
         run: mkdir _site && cp Result.html _site/index.html
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
