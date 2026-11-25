@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy2.outputs.page_url || steps.deploy3.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
       - name: Build page from Garmin
@@ -36,5 +36,23 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
+      # GitHub sometimes can't see a just-uploaded artifact for a few seconds,
+      # so deploy-pages fails with "No artifacts named github-pages were found"
+      # (https://github.com/actions/deploy-pages/issues/451). Retry with waits
+      # instead of failing; the extra steps only run if the previous try failed.
       - id: deploy
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+      - name: Wait before retrying deploy
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 15
+      - id: deploy2
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+      - name: Wait before final deploy try
+        if: steps.deploy2.outcome == 'failure'
+        run: sleep 60
+      - id: deploy3
+        if: steps.deploy2.outcome == 'failure'
         uses: actions/deploy-pages@v5
