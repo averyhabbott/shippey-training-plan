@@ -242,9 +242,8 @@ def dynamic_plan(mon, target, days, miles, today):
     if days["Wed"] == OPTIONAL:  # Tue + Wed + Thu = Sat
         wed = val(2, 0)
         dyn["Thu"] = ceil_half(sat - tue - wed)
-    else:  # Tue + Wed + Thu = 1.5x Sat; Wed = what Tue actually ran
-        dyn["Wed"] = tue
-        wed = val(2, dyn["Wed"])
+    else:  # Tue + Wed + Thu = 1.5x Sat; Wed keeps its planned miles (= planned Tue, not what Tue actually ran)
+        wed = val(2, days["Wed"])
         dyn["Thu"] = ceil_half(1.5 * sat - tue - wed)
     before_sun = val(0, 0) + tue + wed + val(3, dyn["Thu"]) + val(4, 0) + val(5, sat)
     dyn["Sun"] = min(days["Sun"], ceil_half(target - before_sun))  # never more than planned; less if the week is already covered
@@ -274,9 +273,10 @@ assert dynamic_plan(*_wk, _ex, D(2026, 11, 8))["Sun"] == 10  # behind on the wee
 assert dynamic_plan(*_wk, _ex | {D(2026, 11, 7): 18}, D(2026, 11, 8))["Sun"] == 6  # ahead: only what's left
 assert dynamic_plan(*_wk, _ex | {D(2026, 11, 7): 24}, D(2026, 11, 8))["Sun"] == 0  # target already hit
 assert dynamic_plan(*_wk, {D(2026, 11, 3): 7, D(2026, 11, 4): 6}, D(2026, 11, 5))["Thu"] == 0  # block done -> rest
-# Wed = Tue weeks: Wed follows what Tue actually ran.
+# Wed = Tue weeks (Tue 8.5, Wed 8.5, Thu 8.5, Sat 17): Wed stays at plan; going over on Tue comes off Thu.
 _wk = (D(2026, 12, 7), 55, initial_plan(55, SAME_AS_TUE))
-assert dynamic_plan(*_wk, {D(2026, 12, 8): 9}, D(2026, 12, 9))["Wed"] == 9
+assert dynamic_plan(*_wk, {D(2026, 12, 8): 9}, D(2026, 12, 9))["Wed"] == 8.5
+assert dynamic_plan(*_wk, {D(2026, 12, 8): 9}, D(2026, 12, 9))["Thu"] == 8
 
 def week_table(mon, days, target, miles, cardio, climb, today):
     """Days as columns; rows are Initial Plan, Dynamic Plan, Strength, Garmin Distance, Garmin Climbing, and status.
